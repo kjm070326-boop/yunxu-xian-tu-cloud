@@ -1,0 +1,10 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import buildApp from './app.js';
+import { createRepository } from './repositories.js';
+import { DeepseekNarrator } from './narration/deepseek.js';
+const dbPath = process.env.DB_PATH ?? './data/yunxu.sqlite';
+if (dbPath !== ':memory:') fs.mkdirSync(path.dirname(path.resolve(dbPath)), { recursive: true });
+const narrator = process.env.DEEPSEEK_API_KEY ? new DeepseekNarrator() : undefined;
+const app = buildApp({ repo: createRepository(dbPath), narrator });
+app.listen({ port: Number(process.env.PORT ?? 3000), host: '0.0.0.0' }).catch((e) => { console.error(e); process.exit(1); });

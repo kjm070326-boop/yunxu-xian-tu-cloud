@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: yunxu-rebuild
+    env: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: DB_PATH
+        value: /data/yunxu.sqlite
+      - key: B2_BUCKET
+        sync: false
+      - key: B2_KEY_ID
+        sync: false
+      - key: B2_APPLICATION_KEY
+        sync: false
+      - key: B2_ENDPOINT
+        sync: false
+      - key: DEEPSEEK_API_KEY
+        sync: false
