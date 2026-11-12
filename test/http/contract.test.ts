@@ -21,3 +21,43 @@ describe('HTTP action contract',()=>{
 describe('auxiliary endpoints',()=>{it('chapters and achievements',async()=>{expect((await app.inject('/api/v1/chapters')).json().data).toHaveLength(8); expect((await app.inject('/api/v1/achievements')).json().data).toHaveLength(21);}); it('imports save and exposes recap/past lives',async()=>{const r=await app.inject({method:'POST',url:'/api/v1/save/import',payload:JSON.parse(readFileSync('spec/save-export.json','utf8'))}); expect(r.statusCode).toBe(200); expect(r.json().data).toMatchObject({imported:true}); expect(JSON.stringify(r.json())).toContain('杨柳青'); expect((await app.inject('/api/v1/story/recap')).json().data.items.length).toBeGreaterThan(0); expect((await app.inject('/api/v1/past-lives')).json().data).toEqual([]);}); it('past lives appear after endLife',async()=>{await seed(); await app.inject({method:'POST',url:'/api/v1/life/end',headers:freshHeaders()}); expect((await app.inject('/api/v1/past-lives')).json().data.length).toBe(1);});});
  it('rest persists the next ISO date and refills energy after importing', async () => { await app.inject({ method:'POST', url:'/api/v1/save/import', payload:JSON.parse(readFileSync('spec/save-export.json','utf8')) }); const before = await app.inject('/api/v1/state'); const rest = await app.inject({ method:'POST', url:'/api/v1/actions', headers:{...freshHeaders(),'if-match':String(before.json().data.save.version)}, payload:{kind:'rest'} }); expect(rest.statusCode).toBe(200); expect(rest.json().data.state.save).toMatchObject({gameDate:'0001-01-02', gameDay:2, gameMonth:1, gameYear:1, energy:4}); });
  it('rejects an unmet goal and rewards a custom goal at its target', async () => { await seed(); let current = await app.inject('/api/v1/state'); let version = current.json().data.save.version; const set = await app.inject({method:'POST',url:'/api/v1/goals',headers:{...freshHeaders(),'if-match':String(version)},payload:{goal:{type:'custom',target:2}}}); version = set.json().meta.version; const unmet = await app.inject({method:'POST',url:'/api/v1/goals/1/claim',headers:{...freshHeaders(),'if-match':String(version)},payload:{}}); expect(unmet.statusCode).toBe(422); expect(unmet.json().error.code).toBe('GOAL_NOT_MET'); const progress = await app.inject({method:'POST',url:'/api/v1/goals/1/progress',headers:{...freshHeaders(),'if-match':String(version)},payload:{progress:2}}); const claimed = await app.inject({method:'POST',url:'/api/v1/goals/1/claim',headers:{...freshHeaders(),'if-match':String(progress.json().meta.version)},payload:{}}); expect(claimed.statusCode).toBe(200); expect(claimed.json().data).toMatchObject({cultivation:20,stones:75}); });
+
+describe('多存档管理', () => {
+  it('支持创建第二个存档、列表和切换，且保留旧档数据', async () => {
+    await seed();
+    const first = (await app.inject('/api/v1/state')).json().data.save;
+    const created = await app.inject({ method: 'POST', url: '/api/v1/character', headers: freshHeaders(), payload: { name: '第二人', origin: '坊市孤儿', root: 'heaven' } });
+    expect(created.statusCode).toBe(200);
+    const listed = await app.inject('/api/v1/saves');
+    expect(listed.json().data).toHaveLength(2);
+    expect(listed.json().data.find((item: any) => item.current).name).toBe('第二人');
+    const switched = await app.inject({ method: 'POST', url: `/api/v1/saves/${first.id}/activate`, headers: freshHeaders(), payload: {} });
+    expect(switched.statusCode).toBe(200);
+    expect((await app.inject('/api/v1/state')).json().data.save.name).toBe('测试者');
+    expect((await app.inject('/api/v1/state')).json().data.stories).toHaveLength(1);
+  });
+  it('拒绝删除当前存档，删除非当前存档并返回 404 边界', async () => {
+    await seed();
+    const created = await app.inject({ method: 'POST', url: '/api/v1/character', headers: freshHeaders(), payload: { name: '第二人', origin: '坊市孤儿', root: 'heaven' } });
+    const secondId = (await app.inject('/api/v1/state')).json().data.save.id;
+    const currentDelete = await app.inject({ method: 'POST', url: `/api/v1/saves/${secondId}/delete`, headers: freshHeaders(), payload: {} });
+    expect(currentDelete.statusCode).toBe(409);
+    await app.inject({ method: 'POST', url: '/api/v1/saves/1/activate', headers: freshHeaders(), payload: {} });
+    const deleted = await app.inject({ method: 'POST', url: `/api/v1/saves/${secondId}/delete`, headers: freshHeaders(), payload: {} });
+    expect(deleted.statusCode).toBe(200);
+    expect((await app.inject('/api/v1/saves')).json().data).toHaveLength(1);
+    expect((await app.inject({ method: 'POST', url: '/api/v1/saves/999/delete', headers: freshHeaders(), payload: {} })).statusCode).toBe(404);
+    expect(created.statusCode).toBe(200);
+  });
+  it('endLife 后可以创建新存档且前世记录汇总全部存档', async () => {
+    await seed();
+    await app.inject({ method: 'POST', url: '/api/v1/life/end', headers: freshHeaders(), payload: {} });
+    const created = await app.inject({ method: 'POST', url: '/api/v1/character', headers: freshHeaders(), payload: { name: '轮回者', origin: '游侠后裔', root: 'common' } });
+    expect(created.statusCode).toBe(200);
+    expect((await app.inject('/api/v1/past-lives')).json().data).toHaveLength(1);
+  });
+  it('读取不存在的存档返回 404', async () => {
+    const response = await app.inject({ method: 'POST', url: '/api/v1/saves/999/activate', headers: freshHeaders(), payload: {} });
+    expect(response.statusCode).toBe(404);
+  });
+});

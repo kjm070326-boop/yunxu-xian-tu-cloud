@@ -42,7 +42,7 @@ function StoryPage({ onChat, onNavigate }: { onChat: () => void; onNavigate: (ta
   return <main className="page story-page"><StatusCard save={save} realmLayer={data.realmLayer} nextLayerGap={data.nextLayerGap} /><ChapterPanel panel={panel} onAdvance={() => void action('advance')} loading={busy} /><GoalBar goal={goal} current={Number(save.cultivation ?? 0)} onClaim={() => goal?.id && void api.claimGoal(goal.id).then(() => queryClient.invalidateQueries({ queryKey: queryKeys.state }))} /><div className="story-actions"><button className="primary-button" onClick={continueStory}>一键继续</button><button className="link-button" onClick={() => onNavigate('quests')}>查看任务堂</button></div>{passage ? <StoryCard passage={passage} /> : data.stories.at(-1) && <StoryCard passage={{ title: String(data.stories.at(-1)?.title ?? '最近故事'), body: String(data.stories.at(-1)?.body ?? '') }} />}<FreeAction suggestions={suggestions.data?.data ?? []} onAction={() => void action('free')} onRefresh={() => void suggestions.refetch()} loading={busy} /><div className="quick-actions"><button onClick={() => void action('rest')}>回洞府</button><button onClick={() => onNavigate('inventory')}>背包</button><button onClick={() => onNavigate('goals')}>目标</button><button onClick={onChat}>最近故人</button><button onClick={() => onNavigate('shop')}>坊市</button><button onClick={() => onNavigate('codex')}>图鉴</button><button onClick={() => onNavigate('achievements')}>成就</button><button onClick={() => onNavigate('pastLives')}>前世录</button><button onClick={() => onNavigate('recap')}>回顾</button><button onClick={() => onNavigate('settings')}>设置</button></div></main>;
 }
 
-type Tab = 'story' | 'chat' | 'inventory' | 'goals' | 'quests' | 'shop' | 'codex' | 'achievements' | 'pastLives' | 'recap' | 'settings';
+type Tab = 'story' | 'chat' | 'inventory' | 'goals' | 'quests' | 'shop' | 'codex' | 'saves' | 'achievements' | 'pastLives' | 'recap' | 'settings';
 
 function ChatTab() {
   const queryClient = useQueryClient();
@@ -78,6 +78,15 @@ function InventoryPage() { const queryClient = useQueryClient(); const state = u
 export function CodexPage() { const queryClient = useQueryClient(); const save = useStateQuery().data?.data?.save ?? {}; const codex = save.codex as Record<string, unknown[]> | undefined; const complete = ['beasts', 'items', 'npcs'].every((key) => (codex?.[key] ?? []).length > 0); return <main className="page"><section className="story-card"><h2>图鉴</h2>{([['beasts', '灵兽'], ['items', '器物'], ['npcs', '故人']] as const).map(([type, label]) => <div className="list-row" key={type}><span>{label}<small>{(codex?.[type] ?? []).length} 条记录</small></span></div>)}<button className="teal-button" disabled={!complete} onClick={() => void api.claimCodex().then(() => queryClient.invalidateQueries({ queryKey: queryKeys.state }))}>领取图鉴奖励</button></section></main>; }
 
 const triggerLabels: Record<string, string> = { artifact: '法宝', bond: '好感', chapter: '章节', codex: '图鉴', contribution: '宗门贡献', cultivation: '修为', duel: '决斗胜场', layer: '炼气层', past_life: '前世', pill: '丹药', stones: '灵石' };
+function SavesPage({ onNew }: { onNew: () => void }) {
+  const queryClient = useQueryClient();
+  const saves = useQuery({ queryKey: queryKeys.saves, queryFn: api.getSaves });
+  const refresh = async () => { await queryClient.invalidateQueries({ queryKey: queryKeys.saves }); await queryClient.invalidateQueries({ queryKey: queryKeys.state }); };
+  const activate = async (id: number) => { try { await api.activateSave(id); await refresh(); } catch (cause) { window.alert((cause as Error).message); } };
+  const remove = async (id: number, name: string) => { if (!window.confirm(`确定删除存档“${name}”吗？关联故事、成就、图鉴和前世记录都会删除。`)) return; try { await api.deleteSave(id); await refresh(); } catch (cause) { window.alert((cause as Error).message); } };
+  return <main className="page"><section className="story-card"><div className="section-heading"><div><span className="eyebrow">云端存档</span><h2>存档</h2></div><button className="primary-button" onClick={onNew}>新开存档</button></div>{(saves.data?.data ?? []).length === 0 ? <p>还没有存档，先创建一个角色吧。</p> : (saves.data?.data ?? []).map((save) => <div className="list-row" key={save.id}><span><b>{save.name}{save.current ? ' · 当前' : ''}</b><small>{save.origin} · {save.root} · {save.faction} · 第 {save.chapter} 章 · 炼气 {save.realmLayer} 层 · 修为 {save.cultivation}</small></span><span><button className="teal-button" disabled={save.current} onClick={() => void activate(save.id)}>读档</button><button className="link-button" disabled={save.current} onClick={() => void remove(save.id, save.name)}>删除</button></span></div>)}</section></main>;
+}
+
 function DataPage({ kind }: { kind: 'achievements' | 'pastLives' | 'recap' | 'settings' }) {
   const state = useStateQuery();
   const achievementsQuery = useQuery({ queryKey: ['achievements'], queryFn: api.getAchievements, enabled: kind === 'achievements' });
@@ -92,14 +101,16 @@ function DataPage({ kind }: { kind: 'achievements' | 'pastLives' | 'recap' | 'se
 
 function AppShell() {
   const [tab, setTab] = useState<Tab>('story');
+  const [creating, setCreating] = useState(false);
   const state = useStateQuery();
   const hasSave = Boolean(state.data?.data);
-  const page = tab === 'story' ? <StoryPage onChat={() => setTab('chat')} onNavigate={setTab} /> : tab === 'chat' ? <ChatTab /> : tab === 'goals' ? <GoalsPage /> : tab === 'quests' ? <QuestsPage /> : tab === 'shop' ? <ShopPage /> : tab === 'inventory' ? <InventoryPage /> : tab === 'codex' ? <CodexPage /> : <DataPage kind={tab} />;
-  if (!hasSave && tab !== 'story') return <CreationPage onCreated={() => { void state.refetch(); setTab('story'); }} />;
+  if (creating) return <CreationPage onCreated={() => { void state.refetch(); setCreating(false); setTab('story'); }} />;
+  const page = tab === 'story' ? <StoryPage onChat={() => setTab('chat')} onNavigate={setTab} /> : tab === 'chat' ? <ChatTab /> : tab === 'goals' ? <GoalsPage /> : tab === 'quests' ? <QuestsPage /> : tab === 'shop' ? <ShopPage /> : tab === 'inventory' ? <InventoryPage /> : tab === 'codex' ? <CodexPage /> : tab === 'saves' ? <SavesPage onNew={() => setCreating(true)} /> : <DataPage kind={tab} />;
+  if (!hasSave && tab !== 'story' && tab !== 'saves') return <CreationPage onCreated={() => { void state.refetch(); setTab('story'); }} />;
   const save = state.data?.data?.save ?? {};
   const chapter = Number(save.chapter ?? 1);
   const faction = String(save.faction ?? '散修');
-  return <div className="app"><header className="topbar"><span>云墟仙途</span><span className="topbar-status">第 {chapter} 章 · {faction}</span></header>{page}<nav className="bottom-nav"><button className={tab === 'story' ? 'active' : ''} onClick={() => setTab('story')}>✦<span>故事</span></button><button className={tab === 'chat' ? 'active' : ''} onClick={() => setTab('chat')}>☾<span>聊天</span></button><button className={tab === 'inventory' ? 'active' : ''} onClick={() => setTab('inventory')}>◈<span>背包</span></button><button className={tab === 'goals' ? 'active' : ''} onClick={() => setTab('goals')}>◎<span>目标</span></button><button onClick={() => setTab('shop')}>铺<span>坊市</span></button><button onClick={() => setTab('codex')}>册<span>图鉴</span></button></nav></div>;
+  return <div className="app"><header className="topbar"><span>云墟仙途</span><span className="topbar-status">第 {chapter} 章 · {faction}</span></header>{page}<nav className="bottom-nav"><button className={tab === 'story' ? 'active' : ''} onClick={() => setTab('story')}>✦<span>故事</span></button><button className={tab === 'chat' ? 'active' : ''} onClick={() => setTab('chat')}>☾<span>聊天</span></button><button className={tab === 'inventory' ? 'active' : ''} onClick={() => setTab('inventory')}>◈<span>背包</span></button><button className={tab === 'goals' ? 'active' : ''} onClick={() => setTab('goals')}>◎<span>目标</span></button><button onClick={() => setTab('shop')}>铺<span>坊市</span></button><button onClick={() => setTab('codex')}>册<span>图鉴</span></button><button className={tab === 'saves' ? 'active' : ''} onClick={() => setTab('saves')}>档<span>存档</span></button></nav></div>;
 }
 
 const client = new QueryClient({ defaultOptions: { queries: { staleTime: 10_000, retry: 1 } } });
